@@ -1,0 +1,272 @@
+# **********************************
+# *      STANDARD PUBLIC           *
+# **********************************
+
+# Waring:
+#   1. please update the login name after modifying the image.
+
+#  | Image Name | Login User | OS      |
+#  |------------|------------|---------|
+#  | fs-centos  | centos     | CentOS  |
+#  | fs-ubuntu  | ubuntu     | Ubuntu  |
+#  | fs-head    | ubuntu     | Ubuntu  |
+#  | fs-login   | ubuntu     | Ubuntu  |
+#  | fs-windows | fastone    | Windows |
+
+vendor: aws            # required, cloud service provider
+region: cn-northwest-1 # required, AWS region name
+credential:            # required, AKSK
+  ACCESS_KEY_ID: '***'
+  ACCESS_KEY_SECRET: '***'
+
+# billing bucket
+bucket:
+  region: "cn-northwest-1"               # required, region of billing bucket
+  bucket_name: "bucket_name"             # required, bucket name
+  access_key_id: "***"           # required, AK
+  access_key_secret: "***"       # required, SK
+
+stack:
+  prefix: "standard_public"                   # required prefix
+  master_image: "fs-master-23.03.131821"     # required, for master and common node
+  node_image: "fs-ubuntu-18.04-22.03.55041"    # required, for vdi node
+  master_inst_type: t3a.xlarge                 # required, master and common instance type
+  node_inst_type: t3a.large                    # required, other node instance type
+
+  # ------------------------------ subnet name --
+  subnet_vdi: "{{ stack.prefix }}-subnet-vdi"
+  subnet_master: "{{ stack.prefix }}-subnet-master"
+  subnet_storage: "{{ stack.prefix }}-subnet-storage"
+  subnet_approval: "{{ stack.prefix }}-subnet-approval-cluster"
+  subnet_login: "{{ stack.prefix }}-subnet-login"
+  subnet_default: "{{ stack.prefix }}-subnet-default-cluster"
+
+  # ----------------------------- firewall name --
+  firewall_master: "{{ stack.prefix }}-firewall-master"
+  firewall_common: "{{ stack.prefix }}-firewall-common"
+  firewall_storage: "{{ stack.prefix }}-firewall-storage"
+  firewall_monitor: "{{ stack.prefix }}-firewall-monitor"
+
+  # ------------------------------------- image --
+  image_master: "{{ stack.master_image }}"
+  image_common: "{{ stack.master_image }}"
+  image_monitor: "{{ stack.master_image }}"
+
+  # ----------------------------- instance type --
+  instype_master: "{{ stack.master_inst_type }}"
+  instype_common: "{{ stack.node_inst_type }}"
+  instype_monitor: "{{ stack.node_inst_type }}"
+
+  # ----------------------------- instance name --
+  instance_master: "{{ stack.prefix }}-svc-master"
+  instance_common: "{{ stack.prefix }}-svc-common"
+  instance_monitor: "{{ stack.prefix }}-svc-monitor"
+
+
+configure:
+  dest: "/opt/deploy"                 # destination for upload
+  store_dir: ".buri"                  # buri stack's directory 
+
+
+# Credentials for accessing nodes
+ssh:
+  keypair: "{{ stack.prefix }}-keypair" # required key pair, create new if not available.
+  public_key_path: ""         # optional
+  private_key_path: ""        # optional
+
+
+vpc:
+  name: "{{ stack.prefix }}-vpc"       # required, vpc name, create new vpc if not exist.
+  cidr: "172.78.0.0/16"                  # required cidr.
+
+zone_id: "cn-northwest-1a"             # required az name.
+subnets:
+  - name: "{{ stack.subnet_vdi }}"          # VDI subnet
+    cidr: "172.78.1.0/24"
+    internet: true
+  - name: "{{ stack.subnet_master }}"       # master subnet, for master node only.
+    cidr: "172.78.2.0/24"
+    internet: true
+  - name: "{{ stack.subnet_approval }}"     # subnet for data approval
+    cidr: "172.78.3.0/24"
+    internet: false
+  - name: "{{ stack.subnet_storage }}"      # storage
+    cidr: "172.78.4.0/24"
+    internet: false
+    # ---------------------- Cluster Subnet ----------------------
+  - name: "{{ stack.subnet_default }}"      # cluster subnet
+    cidr: "172.78.16.0/20"                    #  10.0.16.1 ~ 10.0.31.254   4k hosts
+    internet: false
+  - name: "{{ stack.subnet_login }}"        # login subnet
+    cidr: "172.78.8.0/24"
+    internet: true
+
+
+# -- firewall ------------------------------------------------
+firewalls:
+  - name: "{{ stack.firewall_master }}"    # required, port 8000 for data manager, allow VPN-CIDR;allow VDI-CIDR;
+    ingress_access:
+      - "{{ stack.firewall_common }}"
+      - "{{ stack.firewall_monitor }}"
+    rules:
+      - protocol: tcp                   # SSH
+        from_port: 22
+        to_port: 22
+        source: '0.0.0.0/0'
+      - protocol: tcp
+        from_port: 22
+        to_port: 22
+        source: "52.82.89.201/32"                               # Fastone bastion host
+      - protocol: tcp                   # HTTP
+        from_port: 80
+        to_port: 80
+        source: '0.0.0.0/0'
+      - protocol: tcp                   # HTTPS
+        from_port: 443
+        to_port: 443
+        source: '0.0.0.0/0'
+      - protocol: tcp                   # grafana
+        from_port: 3000
+        to_port: 3000
+        source: '0.0.0.0/0'
+      - protocol: tcp                   # fastone-API
+        from_port: 9000
+        to_port: 9000
+        source: '0.0.0.0/0'
+      - protocol: tcp                   # remote-access
+        from_port: 2000
+        to_port: 2000
+        source: '0.0.0.0/0'
+      - protocol: tcp                   # DM download port
+        from_port: 8000
+        to_port: 8000
+        source: '0.0.0.0/0'         # VPN-CIDR 
+      - protocol: tcp                   # cs asinfo
+        from_port: 50121
+        to_port: 50121
+        source: '{{ vpc.cidr }}'
+      # essential storage port(NFS) should be open for all clusters.
+      - protocol: tcp                   # NFS
+        from_port: 2049
+        to_port: 2049
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp                   # NFS PortMapper
+        from_port: 111
+        to_port: 111
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp                   # NFS Mountd
+        from_port: 4002
+        to_port: 4004
+        source: '{{ vpc.cidr }}'
+  - name: "{{ stack.firewall_common }}"          # required, below ports should allow VDI-CIDR.
+    ingress_access:
+      - "{{ stack.firewall_master }}"
+      - "{{ stack.firewall_monitor }}"
+    rules:
+      - protocol: tcp                   # SSH
+        from_port: 22
+        to_port: 22
+        source: '0.0.0.0/0'
+      - protocol: tcp                   # slurmdbd
+        from_port: 6819
+        to_port: 6819
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp                   # NTP
+        from_port: 123
+        to_port: 123
+        source: '{{ vpc.cidr }}'
+      - protocol: udp                   # NTP
+        from_port: 123
+        to_port: 123
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp                  # ldap
+        from_port: 389
+        to_port: 389
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp                  # slurm-accounting-agent
+        from_port: 3333
+        to_port: 3333
+        source: '{{ subnets[stack.subnet_master].cidr }}'
+
+      # -- from firewall storage ----------------------------
+      - protocol: tcp                   # Allow fastone master
+        from_port: 22
+        to_port: 22
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp                   # NFS
+        from_port: 2049
+        to_port: 2049
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp                   # NFS PortMapper
+        from_port: 111
+        to_port: 111
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp                   # NFS Mountd
+        from_port: 4002
+        to_port: 4004
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp                   # samba
+        from_port: 445
+        to_port: 445
+        source: '{{ vpc.cidr }}'
+
+  - name: "{{ stack.firewall_monitor }}"
+    rules:
+      - protocol: tcp                  # SSH
+        from_port: 22
+        to_port: 22
+        source: "0.0.0.0/0"
+      - protocol: tcp
+        from_port: 9090             # prometheus
+        to_port: 9090
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp
+        from_port: 3002            #  gf-alert
+        to_port: 3002
+        source: '{{ vpc.cidr }}'
+      - protocol: tcp
+        from_port: 3000            # grafana
+        to_port: 3000
+        source: '{{ vpc.cidr }}'
+
+
+
+# -- stack service ------------------------------------------------
+nodes:
+  - name: "{{ stack.instance_master }}"
+    is_master: true                             # decide if master node, default: false.
+    subnet: "{{ stack.subnet_master }}"
+    firewall: "{{ stack.firewall_master }}"
+    image: "{{ stack.master_image }}"
+    inst_type: "{{ stack.instype_master }}"
+    alloc_public_ip: true
+    spot: 0
+    root_volume: 50
+    login: ubuntu                               # login name for node, required for template files uploading.
+    iam_role: ""                            # role name, if filled in will replace AKSK.
+    templates:
+      - infra.yaml
+
+  - name: "{{ stack.instance_common }}"
+    subnet: "{{ stack.subnet_master }}"
+    firewall: "{{ stack.firewall_common }}"
+    image: "{{ stack.image_common }}"
+    inst_type: "{{ stack.instype_common }}"
+    alloc_public_ip: true
+    spot: 0
+    root_volume: 50
+    login: ubuntu
+    templates:
+      - infra.yaml
+
+  - name: "{{ stack.instance_monitor }}"
+    subnet: "{{ stack.subnet_master }}"
+    firewall: "{{ stack.firewall_monitor }}"
+    image: "{{ stack.image_monitor }}"
+    inst_type: "{{ stack.instype_monitor }}"
+    alloc_public_ip: true
+    spot: 0
+    root_volume: 50
+    login: ubuntu
+    templates:
+      - infra.yaml
